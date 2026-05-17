@@ -39,6 +39,21 @@ class InteractiveCliTests(unittest.TestCase):
             self.assertIn("Cycle: 0", text)
             self.assertIn("Study water ice extraction", text)
 
+    def test_interactive_auto_command_runs_self_directed_cycles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            memory_path = Path(temp_dir) / "memory.json"
+            agent = AutonomousMarsAgent(memory_store=JsonMemoryStore(memory_path))
+            commands = iter(["auto 2", "quit"])
+            output = StringIO()
+
+            exit_code = run_interactive(agent, memory_path, input_fn=lambda _: next(commands), output=output)
+
+            self.assertEqual(exit_code, 0)
+            text = output.getvalue()
+            self.assertIn("Mars AI self-directed run", text)
+            self.assertIn("Cycles completed: 2", text)
+            self.assertEqual(agent.cycle, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

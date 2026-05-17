@@ -80,6 +80,28 @@ class AutonomousMarsAgentTests(unittest.TestCase):
             any("Map water ice near a future base" in task["description"] for task in status["backlog"])
         )
 
+    def test_self_directed_run_creates_own_startup_plan_and_state(self) -> None:
+        agent = AutonomousMarsAgent(goals=build_default_goals())
+
+        report = agent.run_self_directed(max_cycles=3)
+
+        self.assertEqual(report.cycles_completed, 3)
+        self.assertEqual(report.stop_reason, "cycle_budget_reached")
+        self.assertIn("Establish the autonomous Mars mission operating plan", report.entries[0].task_description)
+        self.assertIn("autonomy_state", report.status)
+        self.assertGreater(report.status["autonomy_state"]["backlog_size"], 0)
+
+    def test_self_directed_run_stops_before_cycle_when_stop_file_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stop_file = Path(temp_dir) / "stop"
+            stop_file.write_text("stop", encoding="utf-8")
+            agent = AutonomousMarsAgent(goals=build_default_goals())
+
+            report = agent.run_self_directed(max_cycles=5, stop_file=stop_file)
+
+            self.assertEqual(report.cycles_completed, 0)
+            self.assertEqual(report.stop_reason, "stop_file_detected")
+
 
 if __name__ == "__main__":
     unittest.main()

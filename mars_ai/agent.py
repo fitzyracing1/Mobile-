@@ -52,6 +52,18 @@ class MemoryEntry:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+@dataclass(frozen=True)
+class SelfDirectedRunReport:
+    """Summary of a self-directed autonomous run."""
+
+    entries: list[MemoryEntry]
+    stop_reason: str
+    cycles_completed: int
+    started_at: str
+    ended_at: str
+    status: dict[str, object]
+
+
 class JsonMemoryStore:
     """Small JSON-backed memory store for autonomous runs."""
 
@@ -146,6 +158,50 @@ class AutonomousMarsAgent:
             new_entries.append(self.run_cycle())
         return new_entries
 
+    def run_self_directed(
+        self,
+        max_cycles: int = 25,
+        stop_file: str | Path | None = None,
+        reflection_interval: int = 4,
+    ) -> SelfDirectedRunReport:
+        """Run as a fully self-directed agent until bounded by limits.
+
+        The loop continuously assesses mission coverage, injects its own
+        reflection and gap-closing tasks, executes the highest-value task, and
+        persists memory after each cycle. Long-running callers can create the
+        optional stop file to end the run cleanly between cycles.
+        """
+
+        if max_cycles < 1:
+            raise ValueError("max_cycles must be at least 1")
+        if reflection_interval < 1:
+            raise ValueError("reflection_interval must be at least 1")
+
+        stop_path = Path(stop_file) if stop_file else None
+        started_at = datetime.now(timezone.utc).isoformat()
+        entries: list[MemoryEntry] = []
+        stop_reason = "cycle_budget_reached"
+
+        for _ in range(max_cycles):
+            if stop_path and stop_path.exists():
+                stop_reason = "stop_file_detected"
+                break
+
+            self._prepare_self_directed_cycle(reflection_interval)
+            entries.append(self.run_cycle())
+
+        if not entries and stop_reason == "cycle_budget_reached":
+            stop_reason = "no_cycles_run"
+
+        return SelfDirectedRunReport(
+            entries=entries,
+            stop_reason=stop_reason,
+            cycles_completed=len(entries),
+            started_at=started_at,
+            ended_at=datetime.now(timezone.utc).isoformat(),
+            status=self.status(),
+        )
+
     def run_cycle(self) -> MemoryEntry:
         """Select, execute, remember, and expand the next task."""
 
@@ -170,6 +226,35 @@ class AutonomousMarsAgent:
             "memory_count": len(self.memory),
             "backlog": [asdict(task) for task in self.backlog],
             "completed_task_ids": sorted(self.completed_task_ids),
+            "autonomy_state": self.autonomy_state(),
+        }
+
+    def autonomy_state(self) -> dict[str, object]:
+        """Assess focus coverage and uncertainty for self-directed planning."""
+
+        focus_areas = sorted({goal.focus_area for goal in self.goals} | set(MarsKnowledgeBase.FACTS))
+        focus_counts = {
+            focus_area: sum(1 for entry in self.memory if entry.focus_area == focus_area)
+            for focus_area in focus_areas
+        }
+        confidence_values = [entry.confidence for entry in self.memory]
+        average_confidence = (
+            round(sum(confidence_values) / len(confidence_values), 3)
+            if confidence_values
+            else 0.0
+        )
+        least_covered_focus_area = min(focus_counts, key=lambda focus_area: (focus_counts[focus_area], focus_area))
+        highest_priority_uncovered_goal = self._highest_priority_sparse_goal(focus_counts)
+
+        return {
+            "focus_counts": focus_counts,
+            "average_confidence": average_confidence,
+            "least_covered_focus_area": least_covered_focus_area,
+            "highest_priority_sparse_goal": asdict(highest_priority_uncovered_goal)
+            if highest_priority_uncovered_goal
+            else None,
+            "backlog_size": len(self.backlog),
+            "next_task": asdict(max(self.backlog, key=self._task_score)) if self.backlog else None,
         }
 
     def ask(self, prompt: str) -> MemoryEntry:
@@ -252,6 +337,59 @@ class AutonomousMarsAgent:
 
         self.backlog.sort(key=self._task_score, reverse=True)
         return self.backlog.pop(0)
+
+    def _prepare_self_directed_cycle(self, reflection_interval: int) -> None:
+        state = self.autonomy_state()
+        focus_counts = state["focus_counts"]
+        assert isinstance(focus_counts, dict)
+
+        if self.cycle == 0:
+            self._add_task(
+                description="Establish the autonomous Mars mission operating plan",
+                focus_area="mission",
+                action="plan",
+                priority=115,
+                rationale="Self-directed startup requires a mission plan before expanding scope.",
+            )
+
+        if self.cycle > 0 and (self.cycle + 1) % reflection_interval == 0:
+            self._add_task(
+                description=f"Reflect on autonomous Mars progress at cycle {self.cycle + 1}",
+                focus_area="mission",
+                action="reflect",
+                priority=112,
+                rationale="Periodic self-review keeps the agent aligned without human prompting.",
+            )
+
+        sparse_goal = self._highest_priority_sparse_goal(focus_counts)
+        if sparse_goal:
+            self._add_task(
+                description=f"Close evidence gap for high-priority goal: {sparse_goal.name}",
+                focus_area=sparse_goal.focus_area,
+                action="research",
+                priority=sparse_goal.priority + 8,
+                rationale="Self-directed coverage assessment found this high-priority goal underexplored.",
+            )
+
+        low_confidence = self._latest_low_confidence_entry()
+        if low_confidence:
+            self._add_task(
+                description=f"Investigate uncertainty from cycle {low_confidence.cycle}: {low_confidence.task_description}",
+                focus_area=low_confidence.focus_area,
+                action="research",
+                priority=86,
+                rationale="Self-directed confidence monitoring identified unresolved uncertainty.",
+            )
+
+        least_covered = state["least_covered_focus_area"]
+        if isinstance(least_covered, str):
+            self._add_task(
+                description=f"Expand autonomous Mars coverage for {least_covered}",
+                focus_area=least_covered,
+                action="research",
+                priority=72,
+                rationale="Self-directed coverage balancing prevents tunnel vision.",
+            )
 
     def _task_score(self, task: Task) -> tuple[int, int, int]:
         focus_count = sum(1 for entry in self.memory if entry.focus_area == task.focus_area)
@@ -369,6 +507,22 @@ class AutonomousMarsAgent:
         queued_ids = {queued.id for queued in self.backlog}
         if task.id not in queued_ids and task.id not in self.completed_task_ids:
             self.backlog.append(task)
+
+    def _highest_priority_sparse_goal(self, focus_counts: dict[str, int]) -> Goal | None:
+        sparse_goals = [
+            goal
+            for goal in self.goals
+            if focus_counts.get(goal.focus_area, 0) < 2
+        ]
+        if not sparse_goals:
+            return None
+        return max(sparse_goals, key=lambda goal: goal.priority)
+
+    def _latest_low_confidence_entry(self) -> MemoryEntry | None:
+        for entry in reversed(self.memory):
+            if entry.confidence < 0.7:
+                return entry
+        return None
 
     @staticmethod
     def _infer_action(text: str) -> str:

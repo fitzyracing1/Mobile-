@@ -9,7 +9,13 @@ from pathlib import Path
 import sys
 from typing import Callable, TextIO
 
-from mars_ai.agent import AutonomousMarsAgent, JsonMemoryStore, MemoryEntry, build_default_goals
+from mars_ai.agent import (
+    AutonomousMarsAgent,
+    JsonMemoryStore,
+    MemoryEntry,
+    SelfDirectedRunReport,
+    build_default_goals,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,16 +49,47 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start an interactive session instead of running a fixed number of cycles.",
     )
+    parser.add_argument(
+        "--self-directed",
+        action="store_true",
+        help="Run the full self-directed autonomy loop.",
+    )
+    parser.add_argument(
+        "--stop-file",
+        help="Optional file path that cleanly stops a self-directed run when it exists.",
+    )
+    parser.add_argument(
+        "--reflection-interval",
+        type=int,
+        default=4,
+        help="How often self-directed mode injects a reflection task.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.interactive and args.self_directed:
+        parser.error("--interactive and --self-directed cannot be used together")
+
     store = JsonMemoryStore(Path(args.memory))
     agent = AutonomousMarsAgent(goals=build_default_goals(args.objective), memory_store=store)
 
     if args.interactive:
         return run_interactive(agent, Path(args.memory))
+
+    if args.self_directed:
+        report = agent.run_self_directed(
+            max_cycles=args.cycles,
+            stop_file=args.stop_file,
+            reflection_interval=args.reflection_interval,
+        )
+        if args.json:
+            print(json.dumps(asdict(report), indent=2))
+        else:
+            _print_self_directed_report(report, Path(args.memory))
+        return 0
 
     entries = agent.run(cycles=args.cycles)
 
@@ -126,6 +163,12 @@ def run_interactive(
             _print_memory(agent.memory, output, _parse_optional_limit(command, default=5))
             continue
 
+        if lowered.startswith("auto"):
+            count = _parse_optional_limit(command, default=5)
+            report = agent.run_self_directed(max_cycles=count)
+            _print_self_directed_report(report, memory_path, output)
+            continue
+
         if lowered.startswith("run"):
             count = _parse_optional_limit(command, default=1)
             entries = agent.run(cycles=count)
@@ -175,11 +218,34 @@ def _print_report(entries: object, status: dict[str, object], memory_path: Path)
     print(f"Backlog size: {len(status['backlog'])}")
 
 
+def _print_self_directed_report(
+    report: SelfDirectedRunReport,
+    memory_path: Path,
+    output: TextIO = sys.stdout,
+) -> None:
+    print("Mars AI self-directed run", file=output)
+    print(f"Memory: {memory_path}", file=output)
+    print(f"Stop reason: {report.stop_reason}", file=output)
+    print(f"Cycles completed: {report.cycles_completed}", file=output)
+    print(file=output)
+
+    for entry in report.entries:
+        _print_entry(entry, output)
+
+    state = report.status.get("autonomy_state", {})
+    if state:
+        print("Autonomy state:", file=output)
+        print(f"  average confidence: {state.get('average_confidence')}", file=output)
+        print(f"  least-covered focus area: {state.get('least_covered_focus_area')}", file=output)
+        print(f"  backlog size: {state.get('backlog_size')}", file=output)
+
+
 def _print_interactive_help(output: TextIO) -> None:
     print("Commands:", file=output)
     print("  ask <question>       Ask the agent a Mars question", file=output)
     print("  <plain text>         Same as ask <plain text>", file=output)
     print("  run [n]              Let the agent run n autonomous cycles", file=output)
+    print("  auto [n]             Run n self-directed autonomous cycles", file=output)
     print("  objective <text>     Add a new high-priority Mars objective", file=output)
     print("  status               Show cycle, memory, and backlog counts", file=output)
     print("  goals                Show mission goals", file=output)
@@ -205,6 +271,10 @@ def _print_status(status: dict[str, object], output: TextIO) -> None:
     print(f"Memory entries: {status['memory_count']}", file=output)
     print(f"Backlog tasks: {len(status['backlog'])}", file=output)
     print(f"Completed tasks: {len(status['completed_task_ids'])}", file=output)
+    state = status.get("autonomy_state", {})
+    if state:
+        print(f"Average confidence: {state.get('average_confidence')}", file=output)
+        print(f"Least-covered focus area: {state.get('least_covered_focus_area')}", file=output)
 
 
 def _print_goals(status: dict[str, object], output: TextIO) -> None:

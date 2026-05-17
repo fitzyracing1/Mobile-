@@ -18,6 +18,8 @@ work for future cycles.
 - Explains each decision with a confidence score and follow-up questions.
 - Provides an interactive prompt for questions, objectives, status, memory, and
   backlog inspection.
+- Runs in a fully self-directed mode that assesses its own coverage,
+  injects reflection tasks, closes evidence gaps, and persists every cycle.
 
 ## Quick start
 
@@ -46,6 +48,43 @@ you want separate autonomous runs:
 python3 -m mars_ai --memory runs/habitat-memory.json --cycles 10
 ```
 
+## Fully self-directed mode
+
+Use `--self-directed` when you want the agent to keep choosing its own work
+without prompts:
+
+```bash
+python3 -m mars_ai --self-directed --cycles 25
+```
+
+In this mode the agent:
+
+1. Assesses focus-area coverage and average confidence.
+2. Creates its own startup plan.
+3. Adds periodic reflection tasks.
+4. Adds evidence-gap tasks for high-priority goals.
+5. Monitors low-confidence memory and schedules follow-up research.
+6. Persists memory after each cycle.
+
+For long-running use, provide a stop file path. The agent exits cleanly between
+cycles when that file exists:
+
+```bash
+python3 -m mars_ai --self-directed --cycles 1000 --stop-file .mars-ai-stop
+```
+
+Then stop it from another terminal with:
+
+```bash
+touch .mars-ai-stop
+```
+
+You can also get the self-directed report as JSON:
+
+```bash
+python3 -m mars_ai --self-directed --cycles 10 --json
+```
+
 ## Interactive mode
 
 Start an interactive session when you want to talk to the agent directly:
@@ -59,6 +98,7 @@ Inside the prompt, you can ask plain-language Mars questions or use commands:
 ```text
 mars-ai> How can a Mars habitat reduce radiation risk?
 mars-ai> objective Map water ice near a future landing site
+mars-ai> auto 5
 mars-ai> run 3
 mars-ai> status
 mars-ai> memory 5
@@ -71,6 +111,8 @@ mars-ai> quit
 - `mars_ai.agent.Goal`: mission-level outcomes the agent pursues.
 - `mars_ai.agent.Task`: concrete work selected by the autonomy loop.
 - `mars_ai.agent.MemoryEntry`: durable record of completed work and uncertainty.
+- `mars_ai.agent.SelfDirectedRunReport`: summary of an autonomous run, including
+  stop reason and final autonomy state.
 - `mars_ai.agent.JsonMemoryStore`: JSON persistence across runs.
 - `mars_ai.agent.AutonomousMarsAgent`: self-directed loop that seeds goals,
   scores tasks, executes work, stores memory, and schedules follow-ups.

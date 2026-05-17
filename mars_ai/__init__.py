@@ -5,6 +5,7 @@ from mars_ai.agent import (
     Goal,
     JsonMemoryStore,
     MemoryEntry,
+    SelfDirectedRunReport,
     Task,
     build_default_goals,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "Goal",
     "JsonMemoryStore",
     "MemoryEntry",
+    "SelfDirectedRunReport",
     "Task",
     "build_default_goals",
 ]
