@@ -59,6 +59,27 @@ class AutonomousMarsAgentTests(unittest.TestCase):
             persisted = json.loads(memory_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted[0]["task_id"], entries[0].task_id)
 
+    def test_user_prompt_is_answered_as_high_priority_task(self) -> None:
+        agent = AutonomousMarsAgent(goals=build_default_goals())
+
+        entry = agent.ask("How should a rover choose a safe route across rocky terrain?")
+
+        self.assertEqual(entry.focus_area, "mobility")
+        self.assertIn("rover", entry.task_description)
+        self.assertEqual(entry.cycle, 1)
+
+    def test_runtime_goal_adds_new_goal_and_backlog_work(self) -> None:
+        agent = AutonomousMarsAgent(goals=build_default_goals())
+
+        goal = agent.add_goal("Map water ice near a future base")
+        status = agent.status()
+
+        self.assertEqual(goal.focus_area, "resources")
+        self.assertEqual(status["goals"][0]["name"], "Map water ice near a future base")
+        self.assertTrue(
+            any("Map water ice near a future base" in task["description"] for task in status["backlog"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

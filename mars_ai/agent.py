@@ -172,22 +172,73 @@ class AutonomousMarsAgent:
             "completed_task_ids": sorted(self.completed_task_ids),
         }
 
+    def ask(self, prompt: str) -> MemoryEntry:
+        """Let a human steer the agent with a high-priority Mars prompt."""
+
+        clean_prompt = prompt.strip()
+        if not clean_prompt:
+            raise ValueError("prompt must not be empty")
+
+        focus_area = self._infer_focus_area(clean_prompt)
+        action = self._infer_action(clean_prompt)
+        task = Task(
+            id=_task_id(
+                action=action,
+                focus_area=focus_area,
+                description=f"user:{self.cycle}:{len(self.memory)}:{clean_prompt}",
+            ),
+            description=clean_prompt,
+            focus_area=focus_area,
+            action=action,
+            priority=110,
+            rationale="Direct user prompt during an interactive session.",
+        )
+        self.backlog.append(task)
+        return self.run_cycle()
+
+    def add_goal(
+        self,
+        name: str,
+        success_metric: str = "Convert the user objective into autonomous Mars tasks with recorded memory.",
+        priority: int = 100,
+        focus_area: str | None = None,
+    ) -> Goal:
+        """Add a new mission goal while the agent is already running."""
+
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("goal name must not be empty")
+
+        goal = Goal(
+            name=clean_name,
+            success_metric=success_metric,
+            priority=priority,
+            focus_area=focus_area or self._infer_focus_area(clean_name),
+        )
+        self.goals.append(goal)
+        self.goals.sort(key=lambda current_goal: current_goal.priority, reverse=True)
+        self._seed_goal(goal)
+        return goal
+
     def _seed_backlog(self) -> None:
         for goal in self.goals:
-            self._add_task(
-                description=f"Research Mars context for goal: {goal.name}",
-                focus_area=goal.focus_area,
-                action="research",
-                priority=goal.priority,
-                rationale=f"Build baseline understanding for success metric: {goal.success_metric}",
-            )
-            self._add_task(
-                description=f"Plan autonomous next steps for goal: {goal.name}",
-                focus_area=goal.focus_area,
-                action="plan",
-                priority=goal.priority - 5,
-                rationale="Convert mission goal into concrete self-directed work.",
-            )
+            self._seed_goal(goal)
+
+    def _seed_goal(self, goal: Goal) -> None:
+        self._add_task(
+            description=f"Research Mars context for goal: {goal.name}",
+            focus_area=goal.focus_area,
+            action="research",
+            priority=goal.priority,
+            rationale=f"Build baseline understanding for success metric: {goal.success_metric}",
+        )
+        self._add_task(
+            description=f"Plan autonomous next steps for goal: {goal.name}",
+            focus_area=goal.focus_area,
+            action="plan",
+            priority=goal.priority - 5,
+            rationale="Convert mission goal into concrete self-directed work.",
+        )
 
     def _select_next_task(self) -> Task:
         if not self.backlog:
@@ -331,6 +382,54 @@ class AutonomousMarsAgent:
         if "reflect" in lowered or "priorit" in lowered:
             return "reflect"
         return "research"
+
+    @staticmethod
+    def _infer_focus_area(text: str) -> str:
+        lowered = text.lower()
+        focus_keywords = {
+            "habitability": (
+                "habitat",
+                "habitable",
+                "crew",
+                "human",
+                "life support",
+                "radiation",
+                "shelter",
+                "lava tube",
+            ),
+            "resources": (
+                "resource",
+                "water",
+                "ice",
+                "oxygen",
+                "propellant",
+                "fuel",
+                "isru",
+                "mining",
+            ),
+            "science": (
+                "science",
+                "sample",
+                "geology",
+                "climate",
+                "astrobiology",
+                "biosignature",
+                "life",
+            ),
+            "mobility": (
+                "rover",
+                "drive",
+                "terrain",
+                "traverse",
+                "mobility",
+                "route",
+                "wheel",
+            ),
+        }
+        for focus_area, keywords in focus_keywords.items():
+            if any(keyword in lowered for keyword in keywords):
+                return focus_area
+        return "mission"
 
 
 def build_default_goals(extra_objective: str | None = None) -> list[Goal]:

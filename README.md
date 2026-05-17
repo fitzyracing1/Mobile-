@@ -16,32 +16,54 @@ work for future cycles.
   and reflection actions.
 - Saves JSON memory so later runs continue from previous work.
 - Explains each decision with a confidence score and follow-up questions.
+- Provides an interactive prompt for questions, objectives, status, memory, and
+  backlog inspection.
 
 ## Quick start
 
 Run the agent directly with Python:
 
 ```bash
-python -m mars_ai --cycles 5
+python3 -m mars_ai --cycles 5
 ```
 
 Add a high-priority Mars objective:
 
 ```bash
-python -m mars_ai --objective "Find the safest lava tube habitat strategy" --cycles 3
+python3 -m mars_ai --objective "Find the safest lava tube habitat strategy" --cycles 3
 ```
 
 Print JSON for another program to consume:
 
 ```bash
-python -m mars_ai --cycles 2 --json
+python3 -m mars_ai --cycles 2 --json
 ```
 
 By default, memory is stored in `.mars-ai-memory.json`. Use a custom path when
 you want separate autonomous runs:
 
 ```bash
-python -m mars_ai --memory runs/habitat-memory.json --cycles 10
+python3 -m mars_ai --memory runs/habitat-memory.json --cycles 10
+```
+
+## Interactive mode
+
+Start an interactive session when you want to talk to the agent directly:
+
+```bash
+python3 -m mars_ai --interactive
+```
+
+Inside the prompt, you can ask plain-language Mars questions or use commands:
+
+```text
+mars-ai> How can a Mars habitat reduce radiation risk?
+mars-ai> objective Map water ice near a future landing site
+mars-ai> run 3
+mars-ai> status
+mars-ai> memory 5
+mars-ai> backlog 10
+mars-ai> quit
 ```
 
 ## Architecture
@@ -62,5 +84,5 @@ keeping the same goal/task/memory contract.
 ## Test
 
 ```bash
-python -m unittest discover -s tests
+python3 -m unittest discover -s tests
 ```
