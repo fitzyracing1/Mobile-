@@ -73,7 +73,13 @@ class EurUsdSellAgent:
         }
 
         items = []
-        for item in root.findall("item"):
+        rss_ns_item = "{http://purl.org/rss/1.0/}item"
+        feed_items = root.findall(rss_ns_item)
+        if not feed_items:
+            # Fallback in case provider changes namespace behavior.
+            feed_items = root.findall("item")
+
+        for item in feed_items:
             rate_node = item.find(".//cb:value", ns)
             date_node = item.find(".//dc:date", ns)
             if rate_node is None or date_node is None:
