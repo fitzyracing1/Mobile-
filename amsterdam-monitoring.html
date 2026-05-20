@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amsterdam Monitoring Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --card: #121935;
+      --text: #e8ecff;
+      --muted: #a8b1d6;
+      --low: #2fbf71;
+      --medium: #f5a623;
+      --high: #e74c3c;
+      --link: #7ab7ff;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f5f7ff;
+        --card: #ffffff;
+        --text: #1e2448;
+        --muted: #55608f;
+        --link: #1f5eea;
+      }
+    }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1, h2 {
+      margin: 0 0 8px;
+    }
+    .meta {
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+    }
+    .sev {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 4px 8px;
+      border-radius: 999px;
+      margin-bottom: 8px;
+    }
+    .low { background: color-mix(in srgb, var(--low) 22%, transparent); color: var(--low); }
+    .medium { background: color-mix(in srgb, var(--medium) 24%, transparent); color: var(--medium); }
+    .high { background: color-mix(in srgb, var(--high) 26%, transparent); color: var(--high); }
+    ul { margin: 8px 0 0 20px; padding: 0; }
+    li { margin: 6px 0; }
+    a { color: var(--link); }
+    .section { margin-top: 20px; }
+    code {
+      background: color-mix(in srgb, var(--card) 70%, black 10%);
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Amsterdam Monitoring Dashboard</h1>
+    <p class="meta">
+      Snapshot generated from monitoring agent signals.<br>
+      Local timestamp: <strong>2026-05-20 02:30 UTC</strong>
+    </p>
+
+    <section class="grid">
+      <article class="card">
+        <span class="sev low">LOW</span>
+        <h2>Weather</h2>
+        <ul>
+          <li>No active KNMI warnings for Amsterdam/NL at check time.</li>
+          <li>Showers possible; localized disruption risk remains limited.</li>
+        </ul>
+        <p><a href="https://knmi.nl/waarschuwingen_en_verwachtingen/overzicht_waarschuwingen.html" target="_blank" rel="noreferrer">KNMI warnings</a></p>
+      </article>
+
+      <article class="card">
+        <span class="sev medium">MEDIUM</span>
+        <h2>Transport</h2>
+        <ul>
+          <li>Roads currently calm, but planned works (N247, S113, Zuidasdok) can create recurring pressure.</li>
+          <li>Schiphol operating normally with possible security/passport waits.</li>
+        </ul>
+        <p>
+          <a href="https://www.amsterdambereikbaar.nl/" target="_blank" rel="noreferrer">Amsterdam Bereikbaar</a> |
+          <a href="https://www.schiphol.nl/en/my-travel-day/today/departures" target="_blank" rel="noreferrer">Schiphol today</a>
+        </p>
+      </article>
+
+      <article class="card">
+        <span class="sev low">LOW</span>
+        <h2>Safety</h2>
+        <ul>
+          <li>No major open regional emergency visible at the latest check.</li>
+          <li>Continue monitoring police news for fast-changing local incidents.</li>
+        </ul>
+        <p>
+          <a href="https://veiligheidsregioaa.nl/organisatie/incidentenindex/" target="_blank" rel="noreferrer">Safety region incidents</a> |
+          <a href="https://www.politie.nl/nieuws?query=Amsterdam" target="_blank" rel="noreferrer">Police news</a>
+        </p>
+      </article>
+
+      <article class="card">
+        <span class="sev medium">MEDIUM</span>
+        <h2>Events / Crowd Flow</h2>
+        <ul>
+          <li>ArenA event schedule indicates notable peak mobility windows today.</li>
+          <li>Expect stronger transit and road load before/after event times.</li>
+        </ul>
+        <p><a href="https://www.johancruijffarena.nl/en/calendar/" target="_blank" rel="noreferrer">ArenA calendar</a></p>
+      </article>
+    </section>
+
+    <section class="card section">
+      <h2>Watchlist</h2>
+      <ul>
+        <li>KNMI warnings and short-term forecast changes</li>
+        <li>NS actuele situatie, GVB diversions, 9292 incident feed</li>
+        <li>Schiphol departures and operational messaging</li>
+        <li>Amsterdam Bereikbaar and Zuidasdok works updates</li>
+        <li>Regional incident index and Amsterdam police signals</li>
+      </ul>
+    </section>
+
+    <section class="card section">
+      <h2>Recheck Cadence</h2>
+      <ul>
+        <li>Weather: every 2h baseline; every 15m if KNMI warning appears.</li>
+        <li>Transport: every 30m baseline; every 10-15m during peaks/incidents.</li>
+        <li>Safety: every 30m baseline; every 10m during active emergencies.</li>
+        <li>Events: morning/afternoon baseline, then hourly around major starts/ends.</li>
+      </ul>
+      <p>Open this file directly, or serve via <code>http://localhost:8000/amsterdam-monitoring.html</code>.</p>
+    </section>
+  </main>
+</body>
+</html>
