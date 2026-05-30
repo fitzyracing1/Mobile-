@@ -5,16 +5,17 @@ Entry point for the Dutch Agent.
 Usage
 -----
   # Paper-trade for 20 ticks then print summary:
-  python main.py --ticks 20
+  python3 main.py --ticks 20
 
-  # Run live (one tick every 5 seconds, Ctrl-C to stop):
-  python main.py --live
+  # Run live on OANDA practice account:
+  python3 main.py --live --oanda --oanda-token YOUR_TOKEN --oanda-account 101-001-XXXXX-001
 
   # Customise parameters:
-  python main.py --ticks 50 --position-size 5000 --stop-loss 0.75 --take-profit 1.5
+  python3 main.py --ticks 50 --position-size 5000 --stop-loss 0.75 --take-profit 1.5
 """
 
 import argparse
+import os
 import sys
 
 from dutch_agent import DutchAgent
@@ -77,6 +78,34 @@ def parse_args(argv=None):
         action="store_true",
         help="Suppress per-tick logging; only print final summary.",
     )
+
+    # OANDA integration
+    oanda = p.add_argument_group("OANDA (real trading)")
+    oanda.add_argument(
+        "--oanda",
+        action="store_true",
+        help="Use OANDA for real prices and order execution.",
+    )
+    oanda.add_argument(
+        "--oanda-token",
+        metavar="TOKEN",
+        default=os.environ.get("OANDA_API_TOKEN", ""),
+        help="OANDA API token (or set OANDA_API_TOKEN env var).",
+    )
+    oanda.add_argument(
+        "--oanda-account",
+        metavar="ID",
+        default=os.environ.get("OANDA_ACCOUNT_ID", ""),
+        help="OANDA account ID (or set OANDA_ACCOUNT_ID env var).",
+    )
+    oanda.add_argument(
+        "--oanda-env",
+        metavar="ENV",
+        default="practice",
+        choices=["practice", "live"],
+        help="OANDA environment: practice (default) or live.",
+    )
+
     return p.parse_args(argv)
 
 
@@ -92,7 +121,27 @@ def main(argv=None):
         verbose=not args.quiet,
     )
 
-    agent = DutchAgent(config=config)
+    if args.oanda:
+        from dutch_agent.oanda import OandaAgent
+
+        token = args.oanda_token
+        account_id = args.oanda_account
+
+        if not token:
+            print("ERROR: --oanda-token (or OANDA_API_TOKEN env var) is required.")
+            return 1
+        if not account_id:
+            print("ERROR: --oanda-account (or OANDA_ACCOUNT_ID env var) is required.")
+            return 1
+
+        agent = OandaAgent(
+            token=token,
+            account_id=account_id,
+            environment=args.oanda_env,
+            config=config,
+        )
+    else:
+        agent = DutchAgent(config=config)
 
     if args.live:
         agent.run(max_ticks=None)
