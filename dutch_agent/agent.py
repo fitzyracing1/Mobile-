@@ -1,29 +1,40 @@
 """
-DutchAgent — the main trading agent loop.
+DutchAgent — the main trading agent loop (v2).
 
-The agent's sole thesis is to be net short the US Dollar ("sell the Dutch
-on the USD").  On non-inverted pairs like EUR/USD it goes *long* the pair
-(long EUR, short USD).  On inverted pairs like USD/JPY it goes *short* the
-pair (short USD, long JPY).
+Strategy improvements over v1
+------------------------------
+1. Correlation filter  — at most one position per correlated pair group
+   (EUR, commodity, inverted-USD).  Prevents tripling up on the same move.
+2. H4 trend filter     — only open when the 4-hour MA also points to USD
+   weakness.  Stops trading against the macro trend.
+3. Score threshold     — requires a composite score < -0.35 (vs -0.10 in v1).
+4. Entry cooldown      — minimum N ticks between any two entries; no more
+   opening all positions in the same minute.
 
-Decision logic
---------------
-Every tick the agent:
-  1. Fetches a new price bar for every tracked pair.
-  2. Computes a composite signal (MA cross + RSI + Bollinger).
-  3. Checks existing positions for stop-loss / take-profit exits.
-  4. Opens new positions when the signal says "sell_usd" and room is available.
-  5. Logs a status table to stdout.
+Decision logic every tick
+--------------------------
+  1. Fetch a new M1 price bar for every tracked pair.
+  2. Compute composite signal (MA cross + RSI + Bollinger) on M1 closes.
+  3. Check existing positions for OANDA-side SL/TP exits (or paper exits).
+  4. For each correlation group that has no open position:
+       a. Find the pair with the strongest sell-USD score.
+       b. Require score < min_score_threshold.
+       c. Confirm the H4 trend agrees (USD weakening on higher timeframe).
+       d. Check cooldown — skip if too soon after the last entry.
+       e. Open position.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
+
+import numpy as np
 
 from .config import AgentConfig, INVERTED_PAIRS
 from .data import DataFeed
+from .filters import EntryCooldown, htf_trend_confirms, select_candidates
 from .position import Portfolio, Side
 from .signals import composite_signal, CompositeSignal
 
@@ -36,7 +47,7 @@ def _fmt_price(pair: str, price: float) -> str:
 
 
 class DutchAgent:
-    """Paper-trading agent that sells the US Dollar."""
+    """Paper-trading agent that sells the US Dollar (v2)."""
 
     def __init__(self, config: Optional[AgentConfig] = None) -> None:
         self.config = config or AgentConfig()
@@ -46,6 +57,10 @@ class DutchAgent:
         )
         self._tick_count = 0
         self._running = False
+        self._cooldown = EntryCooldown(self.config.entry_cooldown_ticks)
+
+        # HTF closes per pair — populated by subclasses or left empty for paper mode
+        self._htf_closes: Dict[str, np.ndarray] = {}
 
         if self.config.verbose:
             logging.basicConfig(
@@ -59,13 +74,12 @@ class DutchAgent:
     # ------------------------------------------------------------------
 
     def warmup(self) -> None:
-        """Pre-fill price histories so indicators are ready from tick 1."""
         logger.info("Warming up %d bars of history …", self.config.warmup_bars)
         self.feed.warmup(self.config.warmup_bars)
         logger.info("Warmup complete.")
 
     # ------------------------------------------------------------------
-    # Core decision loop
+    # Signal computation
     # ------------------------------------------------------------------
 
     def _get_signals(self) -> Dict[str, CompositeSignal]:
@@ -88,6 +102,10 @@ class DutchAgent:
             )
         return signals
 
+    # ------------------------------------------------------------------
+    # Exit checks
+    # ------------------------------------------------------------------
+
     def _check_exits(self, prices: Dict[str, float]) -> None:
         for pair in list(self.portfolio.positions.keys()):
             pos = self.portfolio.positions[pair]
@@ -101,7 +119,6 @@ class DutchAgent:
                         pair, _fmt_price(pair, trade.entry_price),
                         _fmt_price(pair, trade.exit_price), trade.pnl,
                     )
-
             elif pos.is_target_hit(price):
                 trade = self.portfolio.close_position(pair, price, "take_profit")
                 if trade:
@@ -111,26 +128,47 @@ class DutchAgent:
                         _fmt_price(pair, trade.exit_price), trade.pnl,
                     )
 
+    # ------------------------------------------------------------------
+    # Entry logic (v2 with all three filters)
+    # ------------------------------------------------------------------
+
     def _open_positions(
         self,
         prices: Dict[str, float],
         signals: Dict[str, CompositeSignal],
     ) -> None:
         cfg = self.config
-        n_open = len(self.portfolio.positions)
 
-        for pair, sig in signals.items():
-            if n_open >= cfg.max_positions:
+        if len(self.portfolio.positions) >= cfg.max_positions:
+            return
+
+        # Cooldown check — one gate for ALL new entries this tick
+        if not self._cooldown.ready(self._tick_count):
+            remaining = self._cooldown.ticks_remaining(self._tick_count)
+            logger.debug("Cooldown: %d ticks remaining before next entry", remaining)
+            return
+
+        open_pairs: Set[str] = set(self.portfolio.positions.keys())
+
+        # Correlation filter: best candidate per group
+        candidates = select_candidates(signals, open_pairs, cfg.min_score_threshold)
+
+        for pair in candidates:
+            if len(self.portfolio.positions) >= cfg.max_positions:
                 break
-            if pair in self.portfolio.positions:
-                continue
-            if sig.action != "sell_usd":
+
+            # H4 trend filter
+            htf = self._htf_closes.get(pair, np.array([]))
+            if not htf_trend_confirms(pair, htf, cfg.htf_ma_fast, cfg.htf_ma_slow):
+                logger.info(
+                    "H4 FILTER   | %-10s | H4 trend does not confirm USD weakness — skip",
+                    pair,
+                )
                 continue
 
             price = prices[pair]
-            # On inverted pairs (USD is base) we SHORT the pair to be short USD.
-            # On non-inverted pairs (USD is quote) we LONG the pair.
             side = Side.SHORT if pair in INVERTED_PAIRS else Side.LONG
+            sig = signals[pair]
 
             pos = self.portfolio.open_position(
                 pair=pair,
@@ -142,11 +180,17 @@ class DutchAgent:
             )
             if pos:
                 logger.info(
-                    "OPEN %-5s  | %-10s | price=%-10s | score=%.2f | RSI=%.1f",
+                    "OPEN %-5s  | %-10s | price=%-10s | score=%+.2f | RSI=%.1f",
                     side.value, pair, _fmt_price(pair, price),
                     sig.score, sig.rsi.value,
                 )
-                n_open += 1
+                self._cooldown.record_entry(self._tick_count)
+                # One entry per tick — wait for next tick to consider another
+                break
+
+    # ------------------------------------------------------------------
+    # Status logging
+    # ------------------------------------------------------------------
 
     def _log_status(self, prices: Dict[str, float]) -> None:
         summary = self.portfolio.summary(prices)
@@ -160,8 +204,11 @@ class DutchAgent:
             summary["win_rate_pct"],
         )
 
+    # ------------------------------------------------------------------
+    # Main tick
+    # ------------------------------------------------------------------
+
     def tick(self) -> Dict:
-        """Execute one agent tick.  Returns current portfolio summary."""
         self._tick_count += 1
         new_bars = self.feed.tick()
         prices = {pair: bar.close for pair, bar in new_bars.items()}
@@ -180,18 +227,15 @@ class DutchAgent:
     # ------------------------------------------------------------------
 
     def run(self, max_ticks: Optional[int] = None) -> None:
-        """
-        Run the agent continuously.
-
-        Parameters
-        ----------
-        max_ticks:
-            Stop after this many ticks (useful for back-testing / unit tests).
-            Pass None to run indefinitely (stop with Ctrl-C).
-        """
         self.warmup()
         self._running = True
-        logger.info("Dutch Agent started.  Strategy: sell USD on every signal.")
+        logger.info("Dutch Agent v2 started.  Strategy: sell USD — filtered.")
+        logger.info(
+            "Filters: corr-groups=%d | min_score=%.2f | cooldown=%d ticks | H4 trend=ON",
+            len(set(self.config.pairs)),
+            self.config.min_score_threshold,
+            self.config.entry_cooldown_ticks,
+        )
         logger.info("Pairs: %s", ", ".join(self.config.pairs))
 
         try:
@@ -199,7 +243,7 @@ class DutchAgent:
                 self.tick()
                 if max_ticks is not None and self._tick_count >= max_ticks:
                     break
-                if max_ticks is None:  # live mode
+                if max_ticks is None:
                     time.sleep(self.config.tick_interval_seconds)
         except KeyboardInterrupt:
             logger.info("Agent stopped by user.")
