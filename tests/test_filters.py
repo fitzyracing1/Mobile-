@@ -1,13 +1,17 @@
-"""Tests for the v2 entry filters."""
+"""Tests for the v2/v3 entry filters."""
 
 import numpy as np
 import pytest
 
 from dutch_agent.filters import (
     EntryCooldown,
+    htf_direction,
     htf_trend_confirms,
+    position_side,
     select_candidates,
+    select_candidates_bidirectional,
 )
+from dutch_agent.position import Side
 from dutch_agent.signals import CompositeSignal, MACrossSignal, RSISignal, BollingerSignal
 
 
@@ -168,3 +172,108 @@ class TestEntryCooldown:
         cd.record_entry(current_tick=12)  # second entry
         assert cd.ready(current_tick=21) is False  # clock reset to tick 12
         assert cd.ready(current_tick=22) is True
+
+
+# ---------------------------------------------------------------------------
+# htf_direction
+# ---------------------------------------------------------------------------
+
+class TestHTFDirection:
+    def test_non_inverted_uptrend_is_sell_usd(self):
+        closes = make_trend(30, slope=0.001)
+        assert htf_direction("EUR/USD", closes, 10, 25) == "sell_usd"
+
+    def test_non_inverted_downtrend_is_buy_usd(self):
+        closes = make_trend(30, slope=-0.001)
+        assert htf_direction("EUR/USD", closes, 10, 25) == "buy_usd"
+
+    def test_inverted_uptrend_is_buy_usd(self):
+        closes = make_trend(30, slope=0.1)
+        assert htf_direction("USD/JPY", closes, 10, 25) == "buy_usd"
+
+    def test_inverted_downtrend_is_sell_usd(self):
+        closes = make_trend(30, slope=-0.1)
+        assert htf_direction("USD/JPY", closes, 10, 25) == "sell_usd"
+
+    def test_neutral_when_insufficient_data(self):
+        assert htf_direction("EUR/USD", make_trend(5, 0.001), 10, 25) == "neutral"
+
+    def test_neutral_on_empty(self):
+        assert htf_direction("GBP/USD", np.array([]), 10, 25) == "neutral"
+
+
+# ---------------------------------------------------------------------------
+# select_candidates_bidirectional
+# ---------------------------------------------------------------------------
+
+class TestSelectCandidatesBidirectional:
+    def _htf(self, direction: str) -> np.ndarray:
+        """Return 30-bar H4 history trending in the given USD direction."""
+        slope = 0.001 if direction == "sell_usd" else -0.001
+        return make_trend(30, slope)
+
+    def test_picks_buy_usd_when_h4_is_strong_usd(self):
+        # EUR/USD falling on H4 (buy_usd) + M1 also says buy_usd
+        htf_closes = {"EUR/USD": self._htf("buy_usd"), "GBP/USD": self._htf("buy_usd"),
+                      "AUD/USD": self._htf("buy_usd"), "NZD/USD": self._htf("buy_usd"),
+                      "USD/JPY": make_trend(30, 0.1),  # rising = buy_usd
+                      "USD/CHF": make_trend(30, 0.001), "USD/CAD": make_trend(30, 0.001)}
+        signals = {
+            "EUR/USD": make_sig(-0.50),   # M1 says sell_usd — disagrees with H4
+            "GBP/USD": make_sig(+0.60),   # M1 says buy_usd — agrees with H4
+            "AUD/USD": make_sig(+0.40),
+            "NZD/USD": make_sig(+0.20),
+            "USD/JPY": make_sig(+0.70),   # inverted + H4 rising = buy_usd ✓
+            "USD/CHF": make_sig(+0.40),
+            "USD/CAD": make_sig(+0.10),   # below threshold
+        }
+        candidates = select_candidates_bidirectional(
+            signals, open_pairs=set(), min_score=-0.35,
+            htf_closes=htf_closes, htf_fast=10, htf_slow=25,
+        )
+        pairs = [p for p, _ in candidates]
+        actions = {p: a for p, a in candidates}
+        assert "GBP/USD" in pairs
+        assert actions.get("GBP/USD") == "buy_usd"
+        assert "EUR/USD" not in pairs  # M1/H4 disagree
+
+    def test_skips_group_with_open_position(self):
+        htf_closes = {p: make_trend(30, -0.001) for p in
+                      ["EUR/USD","GBP/USD","AUD/USD","NZD/USD","USD/JPY","USD/CHF","USD/CAD"]}
+        signals = {p: make_sig(+0.80) for p in htf_closes}
+        candidates = select_candidates_bidirectional(
+            signals, open_pairs={"EUR/USD"}, min_score=-0.35,
+            htf_closes=htf_closes, htf_fast=10, htf_slow=25,
+        )
+        pairs = [p for p, _ in candidates]
+        assert "EUR/USD" not in pairs
+        assert "GBP/USD" not in pairs   # same group
+
+    def test_neutral_h4_skipped(self):
+        # Not enough H4 data → neutral → skip
+        htf_closes = {p: np.array([1.0, 1.001]) for p in
+                      ["EUR/USD","GBP/USD","AUD/USD","NZD/USD","USD/JPY","USD/CHF","USD/CAD"]}
+        signals = {p: make_sig(-0.80) for p in htf_closes}
+        candidates = select_candidates_bidirectional(
+            signals, open_pairs=set(), min_score=-0.35,
+            htf_closes=htf_closes, htf_fast=10, htf_slow=25,
+        )
+        assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# position_side
+# ---------------------------------------------------------------------------
+
+class TestPositionSide:
+    def test_sell_usd_non_inverted_is_long(self):
+        assert position_side("EUR/USD", "sell_usd") == Side.LONG
+
+    def test_sell_usd_inverted_is_short(self):
+        assert position_side("USD/JPY", "sell_usd") == Side.SHORT
+
+    def test_buy_usd_non_inverted_is_short(self):
+        assert position_side("GBP/USD", "buy_usd") == Side.SHORT
+
+    def test_buy_usd_inverted_is_long(self):
+        assert position_side("USD/CHF", "buy_usd") == Side.LONG

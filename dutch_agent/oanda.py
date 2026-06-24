@@ -268,34 +268,34 @@ class OandaAgent(DutchAgent):
                     )
 
     # ------------------------------------------------------------------
-    # Entry — delegates to DutchAgent._open_positions via override hook
+    # Entry — bidirectional, delegates filters inline
     # ------------------------------------------------------------------
 
     def _open_positions(self, prices: Dict[str, float], signals) -> None:
         cfg = self.config
-        from .filters import EntryCooldown, htf_trend_confirms, select_candidates
-        from .config import INVERTED_PAIRS
+        from .filters import select_candidates_bidirectional, position_side
 
         if len(self._oanda_trade_ids) >= cfg.max_positions:
             return
-
         if not self._cooldown.ready(self._tick_count):
             return
 
         open_pairs = set(self._oanda_trade_ids.keys())
-        candidates = select_candidates(signals, open_pairs, cfg.min_score_threshold)
+        candidates = select_candidates_bidirectional(
+            signals=signals,
+            open_pairs=open_pairs,
+            min_score=cfg.min_score_threshold,
+            htf_closes=self._htf_closes,
+            htf_fast=cfg.htf_ma_fast,
+            htf_slow=cfg.htf_ma_slow,
+        )
 
-        for pair in candidates:
+        for pair, action in candidates:
             if len(self._oanda_trade_ids) >= cfg.max_positions:
                 break
 
-            htf = self._htf_closes.get(pair, np.array([]))
-            if not htf_trend_confirms(pair, htf, cfg.htf_ma_fast, cfg.htf_ma_slow):
-                logger.info("H4 FILTER   | %-10s | H4 trend does not confirm — skip", pair)
-                continue
-
             price = prices[pair]
-            side = Side.SHORT if pair in INVERTED_PAIRS else Side.LONG
+            side = position_side(pair, action)
             sig = signals[pair]
 
             trade_id = self.executor.place_order(
@@ -314,9 +314,9 @@ class OandaAgent(DutchAgent):
                 )
                 self._cooldown.record_entry(self._tick_count)
                 logger.info(
-                    "OPEN %-5s  | %-10s | price=%-10s | score=%+.2f | RSI=%.1f",
-                    side.value, pair, _fmt_price(pair, price),
-                    sig.score, sig.rsi.value,
+                    "OPEN %-5s  | %-10s | %s | price=%-10s | score=%+.2f | RSI=%.1f",
+                    side.value, pair, action.upper(),
+                    _fmt_price(pair, price), sig.score, sig.rsi.value,
                 )
                 break  # one entry per tick
 
@@ -360,25 +360,24 @@ class OandaAgent(DutchAgent):
             from .agent import DutchAgent
             DutchAgent._log_status(self, prices)
 
-        from .signals import composite_signal
+        from .filters import htf_direction
         cfg = self.config
+        sigs = self._get_signals()
         for pair in cfg.pairs:
             hist = self.feed.history(pair)
-            closes = hist.closes()
-            if len(closes) < cfg.slow_ma:
+            if len(hist.closes()) < cfg.slow_ma:
                 continue
-            sig = self._get_signals().get(pair)
+            sig = sigs.get(pair)
             if sig is None:
                 continue
             status = "OPEN" if pair in self._oanda_trade_ids else "    "
-            htf = self._htf_closes.get(pair, np.array([]))
-            h4_ok = htf_trend_confirms(pair, htf, cfg.htf_ma_fast, cfg.htf_ma_slow)
+            h4 = self._htf_closes.get(pair, np.array([]))
+            h4_dir = htf_direction(pair, h4, cfg.htf_ma_fast, cfg.htf_ma_slow)
+            agree = "✓" if sig.action == h4_dir else "✗"
             logger.info(
-                "  %s %-10s price=%-10s score=%+.2f RSI=%5.1f H4=%s → %s",
+                "  %s %-10s price=%-10s score=%+.2f RSI=%5.1f M1=%-9s H4=%-9s %s",
                 status, pair, _fmt_price(pair, prices.get(pair, 0)),
-                sig.score, sig.rsi.value,
-                "✓" if h4_ok else "✗",
-                sig.action,
+                sig.score, sig.rsi.value, sig.action, h4_dir, agree,
             )
 
 
@@ -413,6 +412,3 @@ def _fmt_oanda_price(pair: str, price: float) -> str:
     return f"{price:.{decimals}f}"
 
 
-def htf_trend_confirms(pair, htf_closes, fast_period, slow_period):
-    from .filters import htf_trend_confirms as _htf
-    return _htf(pair, htf_closes, fast_period, slow_period)

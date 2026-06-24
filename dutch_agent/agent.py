@@ -34,7 +34,12 @@ import numpy as np
 
 from .config import AgentConfig, INVERTED_PAIRS
 from .data import DataFeed
-from .filters import EntryCooldown, htf_trend_confirms, select_candidates
+from .filters import (
+    EntryCooldown,
+    htf_direction,
+    position_side,
+    select_candidates_bidirectional,
+)
 from .position import Portfolio, Side
 from .signals import composite_signal, CompositeSignal
 
@@ -150,24 +155,22 @@ class DutchAgent:
 
         open_pairs: Set[str] = set(self.portfolio.positions.keys())
 
-        # Correlation filter: best candidate per group
-        candidates = select_candidates(signals, open_pairs, cfg.min_score_threshold)
+        # Bidirectional selection: correlation + H4 + score threshold in one pass
+        candidates = select_candidates_bidirectional(
+            signals=signals,
+            open_pairs=open_pairs,
+            min_score=cfg.min_score_threshold,
+            htf_closes=self._htf_closes,
+            htf_fast=cfg.htf_ma_fast,
+            htf_slow=cfg.htf_ma_slow,
+        )
 
-        for pair in candidates:
+        for pair, action in candidates:
             if len(self.portfolio.positions) >= cfg.max_positions:
                 break
 
-            # H4 trend filter
-            htf = self._htf_closes.get(pair, np.array([]))
-            if not htf_trend_confirms(pair, htf, cfg.htf_ma_fast, cfg.htf_ma_slow):
-                logger.info(
-                    "H4 FILTER   | %-10s | H4 trend does not confirm USD weakness — skip",
-                    pair,
-                )
-                continue
-
             price = prices[pair]
-            side = Side.SHORT if pair in INVERTED_PAIRS else Side.LONG
+            side = position_side(pair, action)
             sig = signals[pair]
 
             pos = self.portfolio.open_position(
@@ -180,13 +183,12 @@ class DutchAgent:
             )
             if pos:
                 logger.info(
-                    "OPEN %-5s  | %-10s | price=%-10s | score=%+.2f | RSI=%.1f",
-                    side.value, pair, _fmt_price(pair, price),
-                    sig.score, sig.rsi.value,
+                    "OPEN %-5s  | %-10s | %s | price=%-10s | score=%+.2f | RSI=%.1f",
+                    side.value, pair, action.upper(),
+                    _fmt_price(pair, price), sig.score, sig.rsi.value,
                 )
                 self._cooldown.record_entry(self._tick_count)
-                # One entry per tick — wait for next tick to consider another
-                break
+                break  # one entry per tick
 
     # ------------------------------------------------------------------
     # Status logging
@@ -229,10 +231,9 @@ class DutchAgent:
     def run(self, max_ticks: Optional[int] = None) -> None:
         self.warmup()
         self._running = True
-        logger.info("Dutch Agent v2 started.  Strategy: sell USD — filtered.")
+        logger.info("Dutch Agent v3 started.  Strategy: bidirectional USD — H4 trend-following.")
         logger.info(
-            "Filters: corr-groups=%d | min_score=%.2f | cooldown=%d ticks | H4 trend=ON",
-            len(set(self.config.pairs)),
+            "Filters: corr-groups | min_score=%.2f | cooldown=%d ticks | H4=bidirectional",
             self.config.min_score_threshold,
             self.config.entry_cooldown_ticks,
         )
