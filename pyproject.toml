@@ -1,0 +1,18 @@
+[project]
+name = "mars-ai-agent"
+version = "0.1.0"
+description = "A self-directed Mars-focused AI agent scaffold with local memory and autonomous task selection."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Mars AI Contributors" }
+]
+license = { text = "MIT" }
+keywords = ["mars", "autonomous-agent", "ai", "space"]
+dependencies = []
+
+[project.scripts]
+mars-ai = "mars_ai.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mars_ai*"]
