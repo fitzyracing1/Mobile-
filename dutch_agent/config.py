@@ -61,9 +61,10 @@ class AgentConfig:
     # value).  Higher magnitude = only trade on strong signals.
     min_score_threshold: float = -0.35
 
-    # Stop-loss and take-profit in % of entry price
-    stop_loss_pct: float = 1.0
-    take_profit_pct: float = 2.0
+    # Stop-loss and take-profit in % of entry price.
+    # Wider stops give H4-driven positions room to breathe through intraday noise.
+    stop_loss_pct: float = 2.0
+    take_profit_pct: float = 4.0
 
     # Minimum ticks to wait between opening any two positions.
     # Prevents all positions being entered in a single burst.
